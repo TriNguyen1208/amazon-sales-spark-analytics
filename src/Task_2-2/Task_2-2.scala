@@ -1,0 +1,76 @@
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.functions._
+
+object Task2_2 {
+    def main(args: Array[String]): Unit = {
+        val inputPath = "/input/amazon_report.csv" 
+        val outputPath = "file:///home/baohg/task_2-2.parquet"
+
+        val spark = SparkSession.builder()
+            .appName("Task_2-2")
+            .master("local[*]")
+            .getOrCreate()
+        
+        spark.sparkContext.setLogLevel("WARN")
+
+        import spark.implicits._
+
+        // Read data from csv
+        val rawDf = spark.read
+            .option("header", "true")
+            .option("inferSchema", "true")
+            .csv(inputPath)
+
+        // Count promotions
+        val step2Df = rawDf
+            .withColumn("month", month(to_date(col("Date"), "MM-dd-yy")))
+            .withColumn("count_promos", 
+                when(col("promotion-ids").isNull, 0)
+                .otherwise(size(split(col("promotion-ids"), ",")))
+            )
+            .select(col("SKU"), col("month"), col("Order ID"), col("Amount"), col("count_promos"))
+
+        // Rank promos
+        val windowSpec = Window.partitionBy("SKU", "month").orderBy(col("count_promos").desc)
+        val windowCount = Window.partitionBy("SKU", "month") 
+
+        val step3Df = step2Df
+            .withColumn("rank", row_number().over(windowSpec))
+            .withColumn("total_orders", count("*").over(windowCount))
+
+        // Filter
+        val targetPromos = step3Df
+            .filter(
+                (col("total_orders") >= 5 && col("rank") === 5) || 
+                (col("total_orders") < 5 && col("rank") === col("total_orders"))
+            )
+            .select(col("SKU").as("t_SKU"), col("month").as("t_month"), col("count_promos").as("target_count"))
+        val finalOrders = step2Df
+            .join(
+                targetPromos, 
+                col("SKU") === col("t_SKU") && col("month") === col("t_month") && col("count_promos") === col("target_count")
+            )
+        
+        // Calc stddev
+        val finalResult = finalOrders
+            .groupBy("SKU", "month")
+            .agg(
+                stddev_pop("Amount").as("std"),
+                count("Amount").as("num_orders") 
+            )
+            // If only 1 order --> stddev = 0
+            .withColumn("std", when(col("num_orders") === 1, 0.0).otherwise(col("std")))
+            .select("SKU", "month", "std")
+
+        // Create output file
+        finalResult.coalesce(1)
+            .write
+            .mode("overwrite")
+            .parquet(outputPath)
+
+        spark.stop()
+    }
+}
+
+
