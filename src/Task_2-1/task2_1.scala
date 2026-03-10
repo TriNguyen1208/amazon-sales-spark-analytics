@@ -10,7 +10,7 @@ object task2_1 {
         // Initialize Spark Session for local execution using all available CPU cores
         val spark = SparkSession
         .builder()
-        .master("local[*]")
+        // .master("local[*]")
         .appName("Task2_1")
         .getOrCreate()
 
