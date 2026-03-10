@@ -45,16 +45,15 @@ object task1_1 {
     }
 
     def main(args: Array[String]) : Unit = {
-        // if (args.length < 2) {
-        //     System.err.println("Usage: task_1-1 <input_path> <output_path>")
-        //     System.exit(1)
-        // }
-        val INPUT_PATH = "/Users/ductri0981/Documents/Scala/amazon-sales-spark-analytics/src/Amazon Sale Report.csv"
-        val OUTPUT_PATH = "Task1-1.csv"
+        if (args.length < 2) {
+            System.err.println("Usage: task_1-1 <input_path> <output_path>")
+            System.exit(1)
+        }
+        val INPUT_PATH = args(0)
+        val OUTPUT_PATH = args(1)
 
         val spark = SparkSession
                     .builder()
-                    .master("local[*]")
                     .appName("Task1_1")
                     .getOrCreate()
 
