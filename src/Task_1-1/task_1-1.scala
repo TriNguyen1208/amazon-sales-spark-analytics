@@ -1,145 +1,331 @@
-import org.apache.spark.sql.SparkSession
-import org.apache.spark.rdd.RDD
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.Path
+import org.apache.hadoop.io._
+import org.apache.hadoop.mapreduce._
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
+
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
-import scala.annotation.meta.field
+import java.io._
+import java.net.URI
 
-object task1_1 {
-    case class ProductBought (state: String, date: LocalDate, size: String, qty: Int, amount: Double)
-    case class Statistics (freq: Int, sum_amount: Double, sum_amount_square: Double, count: Int)
+object Task1_1 {
+    class StatisticsWritable extends Writable {
+        var freq: Int = 0
+        var sumAmount: Double = 0.0
+        var sumAmountSquare: Double = 0.0
+        var count: Int = 0
 
-    val sizeOrder = Map(
-        "XS" -> 1,
-        "S" -> 2,
-        "M" -> 3,
-        "L" -> 4,
-        "XL" -> 5,
-        "XXL" -> 6,
-        "3XL" -> 7,
-        "4XL" -> 8,
-        "5XL" -> 9,
-        "6XL" -> 10,
-        "Free" -> 11
-    )   
+        def this(freq: Int, sumAmount: Double, sumAmountSquare: Double, count: Int) = {
+            this()
+            this.freq = freq
+            this.sumAmount = sumAmount
+            this.sumAmountSquare = sumAmountSquare
+            this.count = count
+        }
 
-    val formatter = DateTimeFormatter.ofPattern("MM-dd-yy")
-    
-    def variance(statistic: Statistics) : Double = {
-        val mean = statistic.sum_amount / statistic.count
-        ((statistic.sum_amount_square / statistic.count) - (mean * mean))
-    }
-    def compare_better(a: (String, Statistics), b: (String, Statistics)) : (String, Statistics) = {
-        val (size_1, statistics_1) = a
-        val (size_2, statistics_2) = b
+        override def write(out: DataOutput): Unit = {
+            out.writeInt(freq)
+            out.writeDouble(sumAmount)
+            out.writeDouble(sumAmountSquare)
+            out.writeInt(count)
+        }
 
-        if(statistics_1.freq == statistics_2.freq){
-            val variance1 = variance(statistics_1)
-            val variance2 = variance(statistics_2)
+        override def readFields(in: DataInput): Unit = {
+            freq = in.readInt()
+            sumAmount = in.readDouble()
+            sumAmountSquare = in.readDouble()
+            count = in.readInt()
+        }
 
-            if(variance1 == variance2){
-                if (sizeOrder(size_1) < sizeOrder(size_2)) a else b
-            }else if (variance1 < variance2) a
-            else b
-        }else if (statistics_1.freq < statistics_2.freq) b
-        else a
+        override def toString: String = s"$freq|$sumAmount|$sumAmountSquare|$count"
     }
 
-    def main(args: Array[String]) : Unit = {
-        if (args.length < 2) {
-            System.err.println("Usage: task_1-1 <input_path> <output_path>")
+    class StateDateSizeKey extends WritableComparable[StateDateSizeKey] {
+        var state: String = ""
+        var date: String = ""
+        var size: String = ""
+
+        def this(state: String, date: String, size: String) = {
+            this()
+            this.state = state
+            this.date = date
+            this.size = size
+        }
+
+        override def write(out: DataOutput): Unit = {
+            out.writeUTF(state)
+            out.writeUTF(date)
+            out.writeUTF(size)
+        }
+
+        override def readFields(in: DataInput): Unit = {
+            state = in.readUTF()
+            date = in.readUTF()
+            size = in.readUTF()
+        }
+
+        override def compareTo(o: StateDateSizeKey): Int = {
+            var res = this.state.compareTo(o.state)
+            if (res == 0) res = this.date.compareTo(o.date)
+            if (res == 0) res = this.size.compareTo(o.size)
+            res
+        }
+    }
+    class CountMapper extends Mapper[LongWritable, Text, Text, IntWritable] {
+        val one = new IntWritable(1)
+
+        override def map(
+            key: LongWritable,
+            value: Text,
+            context: Mapper[LongWritable, Text, Text, IntWritable]#Context
+        ): Unit = {
+
+        val line = value.toString
+
+        if (line.contains("index,Order ID")) return
+
+        val fields = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)")
+
+        if (
+            fields(17).trim.nonEmpty &&
+            fields(3).contains("Shipped") &&
+            fields(13).trim.nonEmpty &&
+            fields(15).trim.nonEmpty &&
+            fields(13).toInt > 0
+        ) {
+            context.write(new Text(fields(17).trim), one)
+        }
+    }
+  }
+    class CountReducer extends Reducer[Text, IntWritable, Text, IntWritable] {
+
+        override def reduce(
+            key: Text,
+            values: java.lang.Iterable[IntWritable],
+            context: Reducer[Text, IntWritable, Text, IntWritable]#Context
+        ): Unit = {
+        var sum = 0
+        val iterator = values.iterator()
+
+        while (iterator.hasNext) {
+            sum += iterator.next().get()
+        }
+        context.write(key, new IntWritable(sum))
+    }
+  }
+
+    class MainMapper extends Mapper[LongWritable, Text, StateDateSizeKey, StatisticsWritable] {
+        val formatter = DateTimeFormatter.ofPattern("MM-dd-yy")
+
+        var windowMap = Map[String, Int]()
+
+        override def setup(
+            context: Mapper[
+                LongWritable,
+                Text,
+                StateDateSizeKey,
+                StatisticsWritable
+            ]#Context
+        ): Unit = {
+            val cacheFiles = context.getCacheFiles
+            if (cacheFiles != null && cacheFiles.length > 0) {
+                val reader = new BufferedReader(new FileReader("state_counts"))
+
+                var line = reader.readLine()
+
+                while (line != null) {
+
+                    val parts = line.split("\t")
+                    val count = parts(1).toInt
+
+                    windowMap += (parts(0) -> (if (count > 10000) 5 else 10))
+
+                    line = reader.readLine()
+                }
+                reader.close()
+            }
+        }
+
+
+        override def map(
+            key: LongWritable,
+            value: Text,
+            context: Mapper[
+                LongWritable,
+                Text,
+                StateDateSizeKey,
+                StatisticsWritable
+            ]#Context
+        ): Unit = {
+
+            val line = value.toString
+
+            if (line.contains("index,Order ID")) return
+
+            val fields = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)")
+
+            if (
+                fields(17).trim.nonEmpty &&
+                fields(3).contains("Shipped") &&
+                fields(13).nonEmpty &&
+                fields(15).nonEmpty &&
+                fields(13).toInt > 0 &&
+                fields(15).toDouble > 0.0
+            ) {
+                val state = fields(17).trim
+                val date = LocalDate.parse(fields(2), formatter)
+                val size = fields(10).trim
+
+                val qty = fields(13).toInt
+                val amount = fields(15).toDouble
+
+                val windowSize = windowMap.getOrElse(state, 10)
+
+                for (i <- 1 to windowSize) {
+                    val windowDate = date.plusDays(i).format(formatter)
+                    val outKey = new StateDateSizeKey(state, windowDate, size)
+                    val outVal = new StatisticsWritable( qty, amount, amount * amount, 1)
+                    context.write(outKey, outVal)
+                }
+            }
+        }
+    }
+    class StateDateGroupComparator extends WritableComparator( classOf[StateDateSizeKey], true ) {
+        override def compare(
+            a: WritableComparable[_],
+            b: WritableComparable[_]
+        ): Int = {
+            val k1 = a.asInstanceOf[StateDateSizeKey]
+            val k2 = b.asInstanceOf[StateDateSizeKey]
+
+            var res = k1.state.compareTo(k2.state)
+
+            if (res == 0) res = k1.date.compareTo(k2.date)
+            res
+        }
+    }
+
+    class MainReducer extends Reducer[ StateDateSizeKey, StatisticsWritable, NullWritable, Text] {
+        val sizeOrder = Map(
+            "XS" -> 1,
+            "S" -> 2,
+            "M" -> 3,
+            "L" -> 4,
+            "XL" -> 5,
+            "XXL" -> 6,
+            "3XL" -> 7,
+            "4XL" -> 8,
+            "5XL" -> 9,
+            "6XL" -> 10,
+            "Free" -> 11
+        )
+
+        def variance(
+            sumAmount: Double,
+            sumAmountSquare: Double,
+            count: Int
+        ): Double = {
+            val mean = sumAmount / count
+            (sumAmountSquare / count) - (mean * mean)
+        }
+
+
+        override def reduce(
+            key: StateDateSizeKey,
+            values: java.lang.Iterable[StatisticsWritable],
+            context: Reducer[ StateDateSizeKey, StatisticsWritable, NullWritable, Text]#Context
+        ): Unit = {
+            val statisticsMap = scala.collection.mutable.Map[ String, (Int, Double, Double, Int)]()
+
+            val iterator = values.iterator()
+
+            while (iterator.hasNext) {
+                val valueData = iterator.next()
+                val currentSize = key.size
+
+                val existing = statisticsMap.getOrElse( currentSize, (0, 0.0, 0.0, 0))
+
+                statisticsMap(currentSize) = (
+                    existing._1 + valueData.freq,
+                    existing._2 + valueData.sumAmount,
+                    existing._3 + valueData.sumAmountSquare,
+                    existing._4 + valueData.count
+                )
+            }
+
+
+            val bestSize = statisticsMap.reduce { (a, b) =>
+
+                val (size_a, (freq_a, sum_a, sum_sq_a, count_a)) = a
+                val (size_b, (freq_b, sum_b, sum_sq_b, count_b)) = b
+
+                if (freq_a == freq_b) {
+                    val var_a = variance(sum_a, sum_sq_a, count_a)
+                    val var_b = variance(sum_b, sum_sq_b, count_b)
+
+                    if (var_a == var_b) {
+                        if (sizeOrder(size_a) < sizeOrder(size_b)) a
+                        else b
+                    } else if (var_a < var_b) a
+                    else b
+                } else if (freq_a < freq_b) b
+                else a
+            }._1
+            context.write( NullWritable.get(), new Text(s"${key.state},${key.date},$bestSize"))
+        }
+    }
+
+
+    def main(args: Array[String]): Unit = {
+
+        if (args.length != 2) {
+            System.err.println(
+                "Task_1-1 need to have both <input path> and <output path>"
+            )
             System.exit(1)
         }
-        val INPUT_PATH = args(0)
-        val OUTPUT_PATH = args(1)
+        val conf = new Configuration()
+        val tempPath = new Path("temp_counts")
+        val job1 = Job.getInstance(conf, "Counting task")
 
-        val spark = SparkSession
-                    .builder()
-                    .appName("Task1_1")
-                    .getOrCreate()
+        job1.setJarByClass(this.getClass)
 
-        spark.sparkContext.setLogLevel("ERROR")
-        
-        val sc = spark.sparkContext
-        val rawData = sc.textFile(INPUT_PATH)
-        val header = rawData.first()
+        job1.setMapperClass(classOf[CountMapper])
+        job1.setReducerClass(classOf[CountReducer])
 
-        //Step 1: Filter bought in rawData. Get fields (state, date, size, qty, amount)
-        val bought = rawData
-                    .filter(_ != header)
-                    .map(line => line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)"))
-                    .filter(fields => fields(3).contains("Shipped") && fields(13).trim.nonEmpty && fields(15).trim.nonEmpty && fields(13).toInt > 0)
-                    .map(field => ProductBought(
-                            field(17).trim,
-                            LocalDate.parse(field(2),formatter),
-                            field(10).trim,
-                            field(13).toInt,
-                            field(15).toDouble
-                        )
-                    )
-                    .cache()
-        
-        //Step 2: Count bought per state
-        val state_count = bought
-                        .map(product => (product.state,1))
-                        .reduceByKey(_+_)
+        job1.setOutputKeyClass(classOf[Text])
+        job1.setOutputValueClass(classOf[IntWritable])
 
-        //Step 3: Compute window size in each state
-        val window_map = state_count
-                        .mapValues(count => if(count > 10000) 5 else 10)
-                        .collectAsMap()
+        FileInputFormat.addInputPath(job1, new Path(args(0)))
 
-        val window_slide = sc.broadcast(window_map)
+        FileOutputFormat.setOutputPath(job1, tempPath)
 
-        //Step 4: Create busket for sliding window. Each product bought contributed to next (d + 1, d + window_size)
-        val busket = bought.flatMap { product => 
-            val window_size = window_slide.value.getOrElse(product.state, 10) //Get window_size or default is 10
-            (1 to window_size).map { i =>
-                val window_date = product.date.plusDays(i)
-                val key = (product.state, window_date, product.size) //This is key to contributed next day
-                val value = Statistics(product.qty, product.amount, product.amount * product.amount, 1) //This is value to contributed next day
-                (key, value)
-            }            
-        }
-        //Busket hien tai gom co
-        // [info] ((MAHARASHTRA,2022-04-11,L),Statistics(1,788.0,1))
-        // [info] ((MAHARASHTRA,2022-04-12,L),Statistics(1,788.0,1))
-        // [info] ((MAHARASHTRA,2022-04-13,L),Statistics(1,788.0,1))
-        // [info] ((MAHARASHTRA,2022-04-14,L),Statistics(1,788.0,1))
-        // [info] ((MAHARASHTRA,2022-04-15,L),Statistics(1,788.0,1))
+        if (!job1.waitForCompletion(true)) System.exit(1)
 
-        //Step 5: Reduced value (freq, sum_amount, sum_amount_square, count) with the same key (state, date, size)
-        val reduced = busket.reduceByKey{ (product_1, product_2) => 
-            Statistics(
-                product_1.freq + product_2.freq,
-                product_1.sum_amount + product_2.sum_amount,
-                product_1.sum_amount_square + product_2.sum_amount_square,
-                product_1.count + product_2.count
-            )
-        }
 
-        //Step 6: Group the size in the state, date
-        val grouped = reduced.map { record => 
-            val key = record._1
-            val value = record._2
+        val job2 = Job.getInstance(conf, "Main Task")
+        job2.setJarByClass(this.getClass)
 
-            val state = key._1
-            val date = key._2
-            val size = key._3
+        job2.addCacheFile(new URI(tempPath.toString + "/part-r-00000#state_counts"))
 
-            ((state, date), (size, value))
-        }.groupByKey()
+        job2.setMapperClass(classOf[MainMapper])
+        job2.setReducerClass(classOf[MainReducer])
 
-        //((Odisha,2022-05-26),CompactBuffer((M,Statistics(1,399.0,1)), (S,Statistics(1,399.0,1))))
-        //Step 7: Compare in Statistic (freq, amount, count), if freq < freq return larger one, else return variance smaller, else return S < L
-        val result = grouped.mapValues{ sizes =>
-            sizes.reduce((a,b) => compare_better(a,b))
-        }
-        // Step 8: output
-        val output = result.map {case((state, date), (size, _)) => s"$state,${date.format(formatter)},$size"}
-        val headerOutput = sc.parallelize(Seq("state,window_date,size"))
-        val finalOutput = headerOutput.union(output)
+        job2.setGroupingComparatorClass(classOf[StateDateGroupComparator])
 
-        finalOutput.saveAsTextFile(OUTPUT_PATH)
-        spark.stop()
+        job2.setMapOutputKeyClass(classOf[StateDateSizeKey])
+
+        job2.setMapOutputValueClass(classOf[StatisticsWritable])
+
+        job2.setOutputKeyClass(classOf[NullWritable])
+        job2.setOutputValueClass(classOf[Text])
+
+        FileInputFormat.addInputPath(job2, new Path(args(0)))
+
+        FileOutputFormat.setOutputPath(job2, new Path(args(1)))
+
+        System.exit(if (job2.waitForCompletion(true)) 0 else 1)
     }
 }
