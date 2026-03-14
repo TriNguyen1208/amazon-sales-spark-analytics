@@ -5,3 +5,10 @@
 hs_err_pid*
 .DS_Store
 .env
+.bsp
+.metals
+.scala-build
+.vscode
+build.sbt
+project
+target
