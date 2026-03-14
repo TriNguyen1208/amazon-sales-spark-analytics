@@ -1,9 +1,9 @@
 import org.apache.hadoop.conf.Configuration
-import org.apache.hadoop.fs.Path
 import org.apache.hadoop.io._
 import org.apache.hadoop.mapreduce._
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
+import org.apache.hadoop.fs.{Path, FileSystem}
 
 
 import java.text.SimpleDateFormat
@@ -365,7 +365,13 @@ object Task1_1 {
 
         FileInputFormat.addInputPath(job2, new Path(args(0)))
         FileOutputFormat.setOutputPath(job2, new Path(args(1)))
-
-        System.exit(if (job2.waitForCompletion(true)) 0 else 1)
+        val job2_success = job2.waitForCompletion(true)
+        if (job2_success){
+            val fs = FileSystem.get(conf)
+            if (fs.exists(tempPath)) {
+                fs.delete(tempPath, true)
+            }
+        }
+        System.exit(if (job2_success) 0 else 1)
     }
 }
