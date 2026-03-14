@@ -9,7 +9,7 @@ object Task2_2 {
 
         val spark = SparkSession.builder()
             .appName("Task_2-2")
-            .master("local[*]")
+            // .master("local[*]")
             .getOrCreate()
         
         spark.sparkContext.setLogLevel("WARN")
@@ -60,7 +60,7 @@ object Task2_2 {
                 count("Amount").as("num_orders") 
             )
             // If only 1 order --> stddev = 0
-            .withColumn("std", when(col("num_orders") === 1, 0.0).otherwise(col("std")))
+            .withColumn("std", when(col("num_orders") === 1, 0.0).otherwise(round(col("std_raw"), 4)))
             .select("SKU", "month", "std")
 
         // Create output file
