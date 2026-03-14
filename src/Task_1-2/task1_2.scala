@@ -1,79 +1,162 @@
-import org.apache.spark.sql.SparkSession
-import config.Constants._
+import java.util._
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{Path, FileSystem}
+import org.apache.hadoop.io._
+import org.apache.hadoop.mapreduce._
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat
+import scala.collection.JavaConverters._
+
+import org.apache.log4j.{Level, Logger, BasicConfigurator}
 
 object task1_2 {
-    def main(args: Array[String]) : Unit = {
-        System.setProperty("hadoop.home.dir", "C:\\winutils")
+  // BasicConfigurator.configure()
+  // Logger.getRootLogger.setLevel(Level.INFO)
+  // // This will show you exactly why the job failed
+  // Logger.getLogger("org.apache.hadoop.mapred.LocalJobRunner").setLevel(Level.DEBUG)
+
+  // Count unique SKUs per style
+  class SKUCountMapper extends Mapper[LongWritable, Text, Text, Text] {
+    override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, Text]#Context): Unit = {
+      try {
+        val line = value.toString
+        if (line.startsWith("index") || line.startsWith("\"index\"")) return
         
-        // Initialize Spark Session for local execution using all available CPU cores
-        val spark = SparkSession
-        .builder()
-        .master("local[*]")
-        .appName("Task1_2")
-        .getOrCreate()
-
-        import spark.implicits._
-
-        spark.sparkContext.setLogLevel("ERROR")
-        val sc = spark.sparkContext
-
-        try {
-            // Load raw text from CSV and remove the header row to prevent processing titles as data
-            val raw_data = sc.textFile(INPUT_PATH)
-            val header = raw_data.first()
-            val data = raw_data.filter(row => row != header && row.trim.nonEmpty)
-
-            // Extracts specific columns and filters for clothing sizes XXL and larger (e.g., 3XL, 4XL)
-            val filtered_data = data.flatMap(line => {
-                val cols = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)")
-
-                val state = cols(17).trim
-                if (state.nonEmpty && state != "") {
-                  val month = cols(2).split("-")(0)
-                  val style_id = cols(7).trim
-                  val sku = cols(8).trim
-                  val size = cols(10).trim
-
-                  // Logic check: "XXL" contains "XL" but is not equal to "XL"
-                  if (size.contains("XL") && size != "XL") {
-                    Some(((month, state, style_id), sku))
-                  } else None
-                } else None
-            })
-
-          // Removes duplicate SKUs within the same style, then counts unique styles per month/state
-          val varieties = filtered_data
-          .distinct()
-          .map {case ((month, state, style_id), sku) => ((month, state), 1)}
-          .reduceByKey(_ + _)
-
-          // Groups all variety counts by (Month, State) to calculate the median of those counts
-          val results = varieties
-          .groupByKey()
-          .mapValues(vList => {
-            val sorted = vList.toList.sorted
-            val n = sorted.size
-
-            if (n % 2 == 0) (sorted(n/2 - 1) + sorted(n/2)) / 2.0
-            else sorted(n/2).toDouble
-          })
-
-          // Re-orders the key to (State, Month) to allow alphabetical sorting by State
-          val grouped_results = results.map{case((month, state), median) => ((state, month), median)}.sortByKey()
-
-          // Manual CSV construction: Combine a custom header RDD with the data RDD
-          val header_output = sc.parallelize(Seq("State,Month,Median"))
-          val rows = grouped_results.map { case ((state, month), median) => 
-              s"$state,$month,$median"
-          }
-
-          val final_output = header_output.union(rows)
-          
-          // Coalesce(1) merges all partitions into a single part-00000 file
-          final_output.coalesce(1).saveAsTextFile(OUTPUT_DIR + "/task1-2")
-
-        } finally {
-          spark.stop()
+        val cols = line.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)")
+        val month = cols(2).split("-")(0)
+        val style_id = cols(7).trim
+        val sku = cols(8).trim
+        val size = cols(10).trim
+        val state = cols(17).trim
+        
+        if (state.nonEmpty && ((size.contains("XL") && size != "XL") || size == "Free")) {
+          context.write(new Text(s"$month\t$state\t$style_id"), new Text(sku))
         }
+      } catch {
+        case e: Exception => 
+          println(s"ERROR at line: ${value.toString.take(50)}... -> ${e.getMessage}")
+      }
     }
+  }
+
+  class SKUCountReducer extends Reducer[Text, Text, Text, IntWritable] {
+    override def reduce(key: Text, value: java.lang.Iterable[Text], context: Reducer[Text, Text, Text, IntWritable]#Context): Unit = {
+      try {
+        val distinct_skus = value.asScala.map(_.toString).toSet
+
+        val parts = key.toString.split("\t")
+        context.write(new Text(s"${parts(0)}\t${parts(1)}"), new IntWritable(distinct_skus.size))
+      } catch {
+        case e: Exception => 
+          println(s"[SKUCountReducer]: ${e.getMessage}")
+      }
+    }
+  }
+
+  class MedianMapper extends Mapper[LongWritable, Text, Text, IntWritable] {
+    override def map(key: LongWritable, value: Text, context: Mapper[LongWritable, Text, Text, IntWritable]#Context): Unit = {
+      val parts = value.toString.split("\t")
+      if (parts.length == 3) {
+        context.write(new Text(s"${parts(0)},${parts(1)}"), new IntWritable(parts(2).toInt))
+      }
+    }
+  }
+
+  class MedianReducer extends Reducer[Text, IntWritable, Text, DoubleWritable] {
+    override def reduce(key: Text, values: java.lang.Iterable[IntWritable], context: Reducer[Text, IntWritable, Text, DoubleWritable]#Context): Unit = {
+      val counts = values.asScala.map(_.get()).toList.sorted
+      
+      val n = counts.size
+      val median = if (n % 2 == 0) {
+        (counts(n / 2 - 1) + counts(n / 2)) / 2.0
+      } else {
+        counts(n / 2).toDouble
+      }
+      context.write(key, new DoubleWritable(median))
+    }
+  }
+
+  def main(args: Array[String]): Unit = {
+    if (args.length != 2) {
+      System.err.println("Usage: <input_path> <output_path>")
+      System.exit(-1)
+    }
+
+    // System.setProperty("user.name", "KhoiPhan")
+    // System.setProperty("HADOOP_USER_NAME", "KhoiPhan")
+    // System.setProperty("hadoop.home.dir", "D:\\Download\\hadoop\\hadoop-3.3.6")
+
+    val conf = new Configuration()
+
+    val customTemp = "./hadoop_temp_internal"
+    conf.set("hadoop.tmp.dir", customTemp)
+    conf.set("mapreduce.cluster.local.dir", s"$customTemp/local")
+    conf.set("mapreduce.cluster.temp.dir", s"$customTemp/temp")
+
+    conf.set("mapreduce.framework.name", "local")
+
+    val tempPathString = "./hadoop_temp_job1"
+    val tempDir = new Path(tempPathString)
+    val finalOutputDir = new Path(args(1))
+
+    val fs = tempDir.getFileSystem(conf)
+    if (fs.exists(tempDir)) {
+      fs.delete(tempDir, true) 
+      println(s"Deleted old temp directory: $tempPathString")
+    }
+    if (fs.exists(finalOutputDir)) {
+      fs.delete(finalOutputDir, true)
+      println(s"Deleted old final output directory: ${args(1)}")
+    }
+
+    // Job 1 Configuration
+    val job1 = Job.getInstance(conf, "Variety Count Scala")
+    job1.setJarByClass(this.getClass)
+    job1.setMapperClass(classOf[SKUCountMapper])
+    job1.setReducerClass(classOf[SKUCountReducer])
+    job1.setOutputKeyClass(classOf[Text])
+    job1.setOutputValueClass(classOf[Text])
+    FileInputFormat.addInputPath(job1, new Path(args(0)))
+    FileOutputFormat.setOutputPath(job1, tempDir)
+
+    val job1_success = job1.waitForCompletion(true)
+
+    if (job1_success) {
+      // Job 2 Configuration
+      val job2 = Job.getInstance(conf, "Median Calculation Scala")
+      job2.getConfiguration.set("mapreduce.output.textoutputformat.separator", ",")
+      job2.setJarByClass(this.getClass)
+      job2.setMapperClass(classOf[MedianMapper])
+      job2.setReducerClass(classOf[MedianReducer])
+      
+      job2.setMapOutputKeyClass(classOf[Text])
+      job2.setMapOutputValueClass(classOf[IntWritable])
+      
+      job2.setOutputKeyClass(classOf[Text])
+      job2.setOutputValueClass(classOf[DoubleWritable])
+      
+      FileInputFormat.addInputPath(job2, tempDir)
+      FileOutputFormat.setOutputPath(job2, finalOutputDir)
+      
+      val job2_success = job2.waitForCompletion(true)
+
+      if (job2_success) {
+        println("All jobs finished successfully. Starting cleanup the temp dirs")
+        
+        val fs = FileSystem.get(conf)
+        
+        if (fs.exists(tempDir)) {
+            fs.delete(tempDir, true)
+        }
+        
+        // Delete the internal Hadoop scratch directory
+        val internalTempPath = new Path(customTemp)
+        if (fs.exists(internalTempPath)) {
+            fs.delete(internalTempPath, true)
+        }
+      }
+
+      System.exit(if (job2_success) 0 else 1)
+    }
+  }
 }
