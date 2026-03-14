@@ -1,11 +1,18 @@
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window
-import org.apache.spark.sql.functions._
+import org.apache.spark.sql.funtions._
 
 object Task2_2 {
     def main(args: Array[String]): Unit = {
-        val inputPath = "/input/amazon_report.csv" 
-        val outputPath = "file:///home/baohg/task_2-2.parquet"
+        // val inputPath = "/input/amazon_report.csv" 
+        // val outputPath = "file:///home/baohg/task_2-2.parquet"
+
+        if (args.length != 2) {
+            sys.exit(1) 
+        }
+
+        val inputPath = args(0)
+        val outputPath = args(1)
 
         val spark = SparkSession.builder()
             .appName("Task_2-2")
@@ -56,7 +63,7 @@ object Task2_2 {
         val finalResult = finalOrders
             .groupBy("SKU", "month")
             .agg(
-                stddev_pop("Amount").as("std"),
+                stddev_pop("Amount").as("std_raw"),
                 count("Amount").as("num_orders") 
             )
             // If only 1 order --> stddev = 0
