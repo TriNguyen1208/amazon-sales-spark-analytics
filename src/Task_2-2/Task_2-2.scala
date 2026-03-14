@@ -4,9 +4,6 @@ import org.apache.spark.sql.funtions._
 
 object Task2_2 {
     def main(args: Array[String]): Unit = {
-        // val inputPath = "/input/amazon_report.csv" 
-        // val outputPath = "file:///home/baohg/task_2-2.parquet"
-
         if (args.length != 2) {
             sys.exit(1) 
         }
