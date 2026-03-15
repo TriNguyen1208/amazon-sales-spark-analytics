@@ -20,13 +20,13 @@ object Task2_2 {
 
         import spark.implicits._
 
-        // Read data from csv
+        // Read data from csv file
         val rawDf = spark.read
             .option("header", "true")
             .option("inferSchema", "true")
             .csv(inputPath)
 
-        // Count promotions
+        // Count promotions in each (SKU, month, order)
         val step2Df = rawDf
             .withColumn("month", month(to_date(col("Date"), "MM-dd-yy")))
             .withColumn("count_promos", 
@@ -35,7 +35,7 @@ object Task2_2 {
             )
             .select(col("SKU"), col("month"), col("Order ID"), col("Amount"), col("count_promos"))
 
-        // Rank promos
+        // Rank promotions of each order
         val windowSpec = Window.partitionBy("SKU", "month").orderBy(col("count_promos").desc)
         val windowCount = Window.partitionBy("SKU", "month") 
 
@@ -43,7 +43,7 @@ object Task2_2 {
             .withColumn("rank", row_number().over(windowSpec))
             .withColumn("total_orders", count("*").over(windowCount))
 
-        // Filter
+        // Filter out the orders which have the fifth-most promotions
         val targetPromos = step3Df
             .filter(
                 (col("total_orders") >= 5 && col("rank") === 5) || 
@@ -56,7 +56,7 @@ object Task2_2 {
                 col("SKU") === col("t_SKU") && col("month") === col("t_month") && col("count_promos") === col("target_count")
             )
         
-        // Calc stddev
+        // Compute stddev of each (SKU, month)
         val finalResult = finalOrders
             .groupBy("SKU", "month")
             .agg(
