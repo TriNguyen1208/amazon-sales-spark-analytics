@@ -63,7 +63,7 @@ nano build.sbt
 ```
 - Write the file as below:
 ```bash
-name := "Task21" 
+name := "Lab2" 
 version := "1.0"
 scalaVersion := "2.13.12"
 libraryDependencies ++= Seq(
@@ -94,7 +94,7 @@ spark-submit \
   --class task2_1 \
   --master yarn \
   --deploy-mode cluster \
-  ./target/scala-2.13/task21_2.13-1.0.jar \
+  ./target/scala-2.13/lab2_2.13-1.0.jar \
   hdfs:///input/amazon_sale_report.csv \
   hdfs:///output/Task_2-1.parquet
 ```
