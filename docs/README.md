@@ -8,12 +8,12 @@ The following instruction shows how to run the Task 1-1 code (Task 1-2 is the sa
 Compile the Scala source file using the Hadoop classpath:
 
 ```bash
-scalac -classpath "$(hadoop classpath)" task_1-1.scala
+scalac -classpath "$(hadoop classpath)" task1_1.scala
 ```
 
 ### 2. Package compiled classes into a JAR file
 ```bash
-jar cf task_1-1.jar *.class
+jar cf task1_1.jar *.class
 ```
 
 ### 3. Add Scala libraries to Hadoop
@@ -41,7 +41,7 @@ hadoop fs -put amazon_sale_report.csv /input/
 
 ### 6. Execute the task_1-1 job
 ```bash
-hadoop jar task_1-1.jar Task1_1 /input/amazon_sale_report.csv /output/
+hadoop jar task1_1.jar task1_1 /input/amazon_sale_report.csv /output/
 ```
 
 **Note:**
@@ -95,8 +95,8 @@ spark-submit \
   --master yarn \
   --deploy-mode cluster \
   target/scala-2.13/task21_2.13-1.0.jar \
-  /input/amazon_sale_report.csv \
-  /output/Task_2-1.parquet
+  hdfs:///input/amazon_sale_report.csv \
+  hdfs:///output/Task_2-1.parquet
 ```
 
 ### 5. Retrieve the output file
