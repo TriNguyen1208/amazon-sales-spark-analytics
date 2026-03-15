@@ -1,6 +1,6 @@
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window
-import org.apache.spark.sql.funtions._
+import org.apache.spark.sql.functions._
 
 object Task2_2 {
     def main(args: Array[String]): Unit = {
