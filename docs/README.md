@@ -91,10 +91,10 @@ sbt package
 ### 4. Run the code
 ```bash
 spark-submit \
-  --class Task2_1 \
+  --class task2_1 \
   --master yarn \
   --deploy-mode cluster \
-  target/scala-2.13/task21_2.13-1.0.jar \
+  ./target/scala-2.13/task21_2.13-1.0.jar \
   hdfs:///input/amazon_sale_report.csv \
   hdfs:///output/Task_2-1.parquet
 ```
