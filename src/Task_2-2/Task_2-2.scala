@@ -35,7 +35,7 @@ object Task2_2 {
             )
             .select(col("SKU"), col("month"), col("Order ID"), col("Amount"), col("count_promos"))
 
-        // Rank promotions of each order
+        // Rank promotions of each order in a (SKU, month) partition
         val windowSpec = Window.partitionBy("SKU", "month").orderBy(col("count_promos").desc)
         val windowCount = Window.partitionBy("SKU", "month") 
 
@@ -43,7 +43,7 @@ object Task2_2 {
             .withColumn("rank", row_number().over(windowSpec))
             .withColumn("total_orders", count("*").over(windowCount))
 
-        // Filter out the orders which have the fifth-most promotions
+        // Filter out the orders which have the fifth-most promotions in each (SKU, month) partition
         val targetPromos = step3Df
             .filter(
                 (col("total_orders") >= 5 && col("rank") === 5) || 
